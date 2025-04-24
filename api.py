@@ -21,10 +21,10 @@ def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get('Authorization')
-        
+
         if not token or token != f"Bearer {API_TOKEN}":
             return jsonify({'message': 'Token is missing or invalid'}), 401
-            
+
         return f(*args, **kwargs)
     return decorated
 
@@ -35,14 +35,14 @@ def get_grades():
         # Obtener parámetros
         course_id = request.args.get('course_id', type=int)
         user_id = request.args.get('user_id', type=int)
-        
+
         if not course_id or not user_id:
             return jsonify({'error': 'Missing course_id or user_id parameters'}), 400
-        
+
         # Conexión a la base de datos
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor(dictionary=True)
-        
+
         # CONSULTA SQL ACTUALIZADA
         query = """
         SELECT 
@@ -59,19 +59,22 @@ def get_grades():
                         'year', CAST(FROM_UNIXTIME(c.startdate, '%Y') AS UNSIGNED)
                     )
                 )
-                FROM mdl_grade_grades gg
-                JOIN mdl_grade_items gi ON gg.itemid = gi.id AND gi.courseid = c.id
-                LEFT JOIN mdl_competency_modulecomp cm ON gi.itemmodule = 'mod' AND gi.iteminstance = cm.cmid
-                LEFT JOIN mdl_competency co ON cm.competencyid = co.id
-                WHERE gg.userid = u.id 
-                AND gi.courseid = c.id
+                FROM mdl_grade_items gi
+                LEFT JOIN mdl_grade_grades gg ON gg.itemid = gi.id AND gg.userid = u.id
+                LEFT JOIN mdl_course_modules cm ON cm.course = c.id 
+                    AND cm.instance = gi.iteminstance 
+                    AND cm.module = (
+                        SELECT id FROM mdl_modules WHERE name = gi.itemmodule
+                    )
+                LEFT JOIN mdl_competency_modulecomp cmc ON cm.id = cmc.cmid
+                LEFT JOIN mdl_competency co ON cmc.competencyid = co.id
+                WHERE gi.courseid = c.id
                 AND gi.itemtype = 'mod'
-                AND gg.finalgrade IS NOT NULL
             ) AS contents
         FROM 
             mdl_course c
         JOIN 
-            mdl_context ctx ON c.id = ctx.instanceid AND ctx.contextlevel = 50
+            mdl_context ctx ON c.id = ctx.instanceid AND ctx.contextlevel IN (50, 70)
         JOIN 
             mdl_role_assignments ra ON ctx.id = ra.contextid
         JOIN 
@@ -79,13 +82,13 @@ def get_grades():
         WHERE 
             c.id = %s AND u.id = %s
         """
-        
+
         cursor.execute(query, (course_id, user_id))
         result = cursor.fetchone()
-        
+
         if not result:
             return jsonify({'message': 'No data found for the given parameters'}), 404
-        
+
         # Procesar los resultados
         if result['contents']:
             contents = json.loads(result['contents'])
@@ -102,10 +105,10 @@ def get_grades():
             result['contents'] = ordered_contents
         else:
             result['contents'] = []
-        
+
         cursor.close()
         conn.close()
-        
+
         # Configurar el orden principal
         app.config['JSON_SORT_KEYS'] = False
         response_data = {
@@ -115,7 +118,7 @@ def get_grades():
             'name': result['name'],
             'contents': result['contents']
         }
-        
+
         return jsonify(response_data)
         
     except mysql.connector.Error as err:
